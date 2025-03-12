@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1
+
+#######################
+# Build Stage
+#######################
+
+# The base image to  be used for the application
+FROM golang:latest AS build
+
+# Create a working directory
+WORKDIR $GOPATH/management-service
+
+# Include only the files required to build the target binary
+ADD apps/common apps/common
+ADD apps/governance/waf apps/governance/waf
+ADD apps/platform/common apps/platform/common
+ADD apps/platform/api-go apps/platform/api-go
+ADD apps/management-service apps/management-service
+
+COPY apps/management-service/ticketing/updateset/templates/ /management/updateset/templates/
+
+# Set up workspace dependencies
+RUN go work init
+RUN go work use apps/common
+RUN go work use apps/governance/waf
+RUN go work use apps/management-service
+RUN go work use apps/platform/common
+RUN go work use apps/platform/api-go
+
+# Download workspace dependencies
+RUN go mod download
+
+# Compile the application without symbols and debug info using ldflags -s -w
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /management-service ./apps/management-service/main.go
+
+#######################
+# PRODUCTION
+#######################
+FROM gcr.io/distroless/static-debian11
+WORKDIR /
+COPY --from=build /management-service /
+COPY --from=build /management/updateset/templates /management/updateset
+
+# Download the Amazon DocumentDB Certificate Authority (CA) certificate required to authenticate to your instance
+ADD --chmod=777  https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem global-bundle.pem
+
+EXPOSE 8081
+
+ENTRYPOINT [ "/management-service", "--start" ]
